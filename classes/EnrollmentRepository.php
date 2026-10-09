@@ -23,6 +23,8 @@ class EnrollmentRepository
 // 7. commit(); otherwise rollBack();
 // Throw or return false when there are no slots left.
 // FILL IN CODE HERE
+
+        
     }
 
     // Enroll an EXISTING student into a class.

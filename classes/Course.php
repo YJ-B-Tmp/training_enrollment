@@ -11,30 +11,36 @@ class Course
     public function all()
     {
         // TODO: return all courses ordered by course_name
-// FILL IN CODE HERE
+
+        return $this->db->query("SELECT * FROM courses ORDER BY course_name")->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function find($id)
     {
         // TODO: return one course by id (prepared statement)
-// FILL IN CODE HERE
+        $stmt = $this->db->prepare('SELECT * FROM courses WHERE id = :id');
+        $stmt->execute(['id' => $id]);
+        return $stmt->fetch(PDO::FETCH_ASSOC);
     }
 
     public function create($code, $name, $description)
     {
         // TODO: insert a course
-        // FILL IN CODE HERE
+        $stmt = $this->db->prepare('INSERT INTO courses (course_code, course_name, course_description) VALUES (:code, :name, :description)');
+        return $stmt -> execute(['code'=> $code,'name'=> $name,'description'=> $description]);
     }
 
     public function update($id, $code, $name, $description)
     {
         // TODO: update a course
-        // FILL IN CODE HERE
+        $stmt = $this->db->prepare('UPDATE courses SET course_code = :code, course_name = :name, course_description = :description WHERE id = :id');
+        return $stmt->execute(['id' => $id, 'code' => $code, 'name' => $name, 'description' => $description]);
     }
 
     public function delete($id)
     {
         // TODO: delete a course
-        // FILL IN CODE HERE
+        $stmt = $this->db->prepare('DELETE FROM courses WHERE id = :id');
+        return $stmt->execute(['id' => $id]);
     }
 }
