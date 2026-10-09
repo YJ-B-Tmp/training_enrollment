@@ -1,141 +1,135 @@
 <?php
 // classes/EnrollmentRepository.php
-// Data-access class that records students, enrollments and slot updates
-// inside a single database transaction.
-class EnrollmentRepository
-{
+class EnrollmentRepository {
     private $db;
-    public function __construct(PDO $db)
-    {
-        $this->db = $db;
+    public function __construct(PDO $db) { $this->db = $db; }
+
+    // Lock the class row and return its slots (false if class not found)
+    private function lockSlots($class_id) {
+        $stmt = $this->db->prepare(
+            'SELECT slots FROM classes WHERE class_id = :id FOR UPDATE');
+        $stmt->execute([':id' => $class_id]);
+        return $stmt->fetchColumn();
     }
 
-    // Record a NEW student AND enroll them into a class.
-    public function recordStudent($full_name, $email, $phone, $class_id)
-    {
-        // TODO: perform ALL of the following inside ONE transaction:
-// 1. beginTransaction()
-// 2. check that the class still has available slots
-// 3. INSERT INTO students (full_name, email, phone)
-// 4. $student_id = lastInsertId()
-// 5. INSERT INTO enrollments (student_id, class_id)
-// 6. UPDATE classes SET slots = slots - 1
-// 7. commit(); otherwise rollBack();
-// Throw or return false when there are no slots left.
-// FILL IN CODE HERE
+    // new student
+    public function recordStudent($full_name, $email, $phone, $class_id) {
         try {
             $this->db->beginTransaction();
 
-            // Check available slots
-            $stmt = $this->db->prepare('SELECT slots FROM classes WHERE id = :class_id FOR UPDATE');
-            $stmt->execute(['class_id' => $class_id]);
-            $class = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$class || $class['class_slots'] <= 0) {
-                throw new Exception('No slots available');
+            $slots = $this->lockSlots($class_id);
+            if ($slots === false || $slots <= 0) {
+                $this->db->rollBack();
+                return false;                    // no slots left
             }
 
-            // Insert student
-            $stmt = $this->db->prepare('INSERT INTO students (full_name, email, phone) VALUES (:full_name, :email, :phone)');
-            $stmt->execute(['full_name' => $full_name, 'email' => $email, 'phone' => $phone]);
+            $stmt = $this->db->prepare(
+                'INSERT INTO students (full_name, email, phone)
+                 VALUES (:n, :e, :p)');
+            $stmt->execute([':n' => $full_name, ':e' => $email, ':p' => $phone]);
             $student_id = $this->db->lastInsertId();
 
-            // Insert enrollment
-            $stmt = $this->db->prepare('INSERT INTO enrollments (student_id, class_id) VALUES (:student_id, :class_id)');
-            $stmt->execute(['student_id' => $student_id, 'class_id' => $class_id]);
+            $stmt = $this->db->prepare(
+                'INSERT INTO enrollments (student_id, class_id) VALUES (:s, :c)');
+            $stmt->execute([':s' => $student_id, ':c' => $class_id]);
 
-            // Update class slots
-            $stmt = $this->db->prepare('UPDATE classes SET slots = lots - 1 WHERE id = :class_id');
-            $stmt->execute(['class_id' => $class_id]);
+            $stmt = $this->db->prepare(
+                'UPDATE classes SET slots = slots - 1 WHERE class_id = :c');
+            $stmt->execute([':c' => $class_id]);
 
-            // Commit transaction
             $this->db->commit();
-        } catch (Exception $e) {
-            // Rollback transaction on error
+            return true;
+        } catch (Exception $ex) {
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
             }
-            throw $e; // Re-throw the exception for further handling
+            throw $ex;
         }
     }
 
-    // Enroll an EXISTING student into a class.
-    public function enroll($student_id, $class_id)
-    {
-        // TODO: inside a transaction:
-// 1. check the class still has available slots
-// 2. INSERT INTO enrollments (student_id, class_id)
-// 3. UPDATE classes SET slots = slots - 1
-// FILL IN CODE HERE
-        try{
-            $this->db->beginTransaction();
-            $stmt = $this->db->prepare('SELECT slots FROM classes WHERE id = :class_id FOR UPDATE');
-            $stmt->execute(['class_id' => $class_id]);
-            $class = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$class || $class['slots'] <= 0) {
-                throw new Exception('No slots available');
-            }
-
-            $stmt = $this->db->prepare('INSERT INTO enrollments (student_id, class_id) VALUES (:student_id, :class_id)');
-            $stmt->execute(['student_id' => $student_id, 'class_id' => $class_id]);
-
-            $stmt = $this->db->prepare('UPDATE classes SET slots = slots - 1 WHERE id = :class_id');
-            $stmt->execute(['class_id' => $class_id]);
-
-            $this->db->commit();
-        } catch (Exception $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
-            throw $e;
-        }
-    }
-
-    // Cancel an enrollment.
-    public function cancel($enrollment_id)
-    {
-        // TODO: inside a transaction:
-// 1. UPDATE enrollments SET status = 'cancelled'
-// 2. UPDATE classes SET slots = slots + 1
-// FILL IN CODE HERE
+    // existing
+    public function enroll($student_id, $class_id) {
         try {
             $this->db->beginTransaction();
 
-            // Update enrollment status
-            $stmt = $this->db->prepare('UPDATE enrollments SET status = "cancelled" WHERE id = :enrollment_id');
-            $stmt->execute(['enrollment_id' => $enrollment_id]);
-
-            // Get class_id for the enrollment
-            $stmt = $this->db->prepare('SELECT class_id FROM enrollments WHERE id = :enrollment_id');
-            $stmt->execute(['enrollment_id' => $enrollment_id]);
-            $class = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if ($class) {
-                // Update class slots
-                $stmt = $this->db->prepare('UPDATE classes SET slots = slots + 1 WHERE id = :class_id');
-                $stmt->execute(['class_id' => $class['class_id']]);
+            $slots = $this->lockSlots($class_id);
+            if ($slots === false || $slots <= 0) {
+                $this->db->rollBack();
+                return 'no_slots';
             }
 
+            // duplicate check
+            $stmt = $this->db->prepare(
+                'SELECT COUNT(*) FROM enrollments
+                 WHERE student_id = :s AND class_id = :c AND status = :st');
+            $stmt->execute([':s' => $student_id, ':c' => $class_id, ':st' => 'active']);
+            if ($stmt->fetchColumn() > 0) {
+                $this->db->rollBack();
+                return 'duplicate';
+            }
+
+            $stmt = $this->db->prepare(
+                'INSERT INTO enrollments (student_id, class_id) VALUES (:s, :c)');
+            $stmt->execute([':s' => $student_id, ':c' => $class_id]);
+
+            $stmt = $this->db->prepare(
+                'UPDATE classes SET slots = slots - 1 WHERE class_id = :c');
+            $stmt->execute([':c' => $class_id]);
+
             $this->db->commit();
-        } catch (Exception $e) {
+            return 'ok';
+        } catch (Exception $ex) {
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
             }
-            throw $e;
+            throw $ex;
         }
     }
-    public function allWithDetails()
-    {
-        // TODO: JOIN enrollments, students, classes and courses
-// FILL IN CODE HERE
-        $stmt = $this->db->query('
-            SELECT e.id AS enrollment_id, s.full_name, s.email, s.phone, c.class_code, c.class_schedule, c.class_instructor, co.course_name
-            FROM enrollments e
-            JOIN students s ON e.student_id = s.id
-            JOIN classes c ON e.class_id = c.id
-            JOIN courses co ON c.course_id = co.id
-        ');
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Cancel an enrollment and give the slot back (one transaction)
+    public function cancel($enrollment_id) {
+        try {
+            $this->db->beginTransaction();
+
+            $stmt = $this->db->prepare(
+                'SELECT class_id, status FROM enrollments
+                 WHERE enrollment_id = :id FOR UPDATE');
+            $stmt->execute([':id' => $enrollment_id]);
+            $row = $stmt->fetch();
+
+            if (!$row || $row['status'] !== 'active') {
+                $this->db->rollBack();
+                return false;                    // missing or already cancelled
+            }
+
+            $stmt = $this->db->prepare(
+                'UPDATE enrollments SET status = :st WHERE enrollment_id = :id');
+            $stmt->execute([':st' => 'cancelled', ':id' => $enrollment_id]);
+
+            $stmt = $this->db->prepare(
+                'UPDATE classes SET slots = slots + 1 WHERE class_id = :c');
+            $stmt->execute([':c' => $row['class_id']]);
+
+            $this->db->commit();
+            return true;
+        } catch (Exception $ex) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $ex;
+        }
+    }
+
+    public function allWithDetails() {
+        return $this->db->query(
+            'SELECT e.enrollment_id, e.enrollment_date, e.status,
+                    s.full_name, s.email,
+                    c.class_code, c.schedule, c.instructor, c.slots,
+                    co.course_name
+             FROM enrollments e
+             JOIN students s  ON e.student_id = s.student_id
+             JOIN classes c   ON e.class_id   = c.class_id
+             JOIN courses co  ON c.course_id  = co.course_id
+             ORDER BY e.enrollment_id DESC')->fetchAll();
     }
 }
