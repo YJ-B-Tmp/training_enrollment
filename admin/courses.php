@@ -33,7 +33,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$errors) {
             try {
                 if ($action === 'update') {
-                    $courseObj->update($id, $code, $name, $desc);
+                    $courseObj->update($code, $name, $desc);
                     $message = 'Course updated.';
                 } else {
                     $courseObj->create($code, $name, $desc);
